@@ -4,15 +4,12 @@
 The top level of the package contains functions to
 note-align symbolic music data.
 """
-import pkg_resources
+import os
 
-EXAMPLE = pkg_resources.resource_filename("parangonar", "assets/mozart_k265_var1.match")
-ALIGNMENT_TRANSFORMER_CHECKPOINT = pkg_resources.resource_filename(
-    "parangonar", "assets/alignment_transformer_checkpoint.pt"
-)
-THEGLUENOTE_CHECKPOINT = pkg_resources.resource_filename(
-    "parangonar", "assets/thegluenote_small_checkpoint.pt"
-)
+EXAMPLE = os.path.join(os.path.dirname(__file__), "assets/mozart_k265_var1.match")
+ALIGNMENT_TRANSFORMER_CHECKPOINT = os.path.join(os.path.dirname(__file__), "assets/alignment_transformer_checkpoint.pt")
+THEGLUENOTE_CHECKPOINT = os.path.join(os.path.dirname(__file__), "assets/thegluenote_mid_checkpoint.pt")
+
 from .match import (
     AnchorPointNoteMatcher,
     AutomaticNoteMatcher,

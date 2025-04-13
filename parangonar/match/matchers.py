@@ -3,15 +3,18 @@
 """
 This module contains full note matcher classes.
 """
-import numpy as np
-from scipy.interpolate import interp1d
-from collections import defaultdict
-import miditok
-import symusic
-
+import random
 import time
+from collections import defaultdict
 from itertools import combinations
+
+import miditok
+import numpy as np
+import symusic
+import torch
+from scipy.interpolate import interp1d
 from scipy.special import binom
+
 
 from ..dp.dtw import DTW, DTWSL
 from ..dp.nwtw import NW_DTW, NW
@@ -34,8 +37,7 @@ from .preprocessors import (
     note_per_ons_encoding,
 )
 
-from .pretrained_models import AlignmentTransformer, TheGlueNote
-import torch
+from .pretrained_models import TheGlueNote
 
 
 ################################### SYMBOLIC MATCHERS ###################################
@@ -375,7 +377,7 @@ def unique_alignments(xs, ys, threshold=None):
     """
     From two sequences of numbers, return the unique ID
     tuples of aligned values that minimize the sum of
-    tupel distances.
+    tuple distances.
 
     Parameters
     ----------
@@ -395,67 +397,33 @@ def unique_alignments(xs, ys, threshold=None):
 
     used_x = set()
     tuples = list()
-    if threshold is not None:
-        for x in xs:
-            if not x in used_x:
-                current_x_mask = xs[p[:, 0]] == x
-                if current_x_mask.sum() > 1:
-                    current_ids = p[current_x_mask, :]
+    for x in xs:
+        if not x in used_x:
+            current_x_mask = xs[p[:, 0]] == x
+            if current_x_mask.sum() > 1:
+                current_ids = p[current_x_mask, :]
+                current_y = ys[current_ids[:, 1]]
+                current_x = xs[current_ids[:, 0]]
+            else:
+                y = ys[p[current_x_mask, 1]]
+                current_y_mask = ys[p[:, 1]] == y
+                if current_y_mask.sum() > 1:
+                    current_ids = p[current_y_mask, :]
                     current_y = ys[current_ids[:, 1]]
                     current_x = xs[current_ids[:, 0]]
-
                 else:
-                    y = ys[p[current_x_mask, 1]]
-                    current_y_mask = ys[p[:, 1]] == y
-                    # print(current_y_mask, current_x_mask, y, ys, xs, x, p[:,:])
-                    if current_y_mask.sum() > 1:
-                        current_ids = p[current_y_mask, :]
-                        current_y = ys[current_ids[:, 1]]
-                        current_x = xs[current_ids[:, 0]]
+                    current_ids = p[current_x_mask, :].reshape(1, 2)
+                    current_x = x
+                    current_y = y
 
-                    else:
-                        current_ids = p[current_x_mask, :].reshape(1, 2)
-                        current_x = x
-                        current_y = y
-
-                candidate_dist = np.min(np.abs(current_x - current_y))
-                candidate_id = np.argmin(np.abs(current_x - current_y))
-                if candidate_dist < threshold:
-                    # chosen_y = current_y[candidate_id]
-                    # tuples.append((x, chosen_y))
-                    tuples.append(
-                        (current_ids[candidate_id, 0], current_ids[candidate_id, 1])
-                    )
-                used_x.update(set(np.unique(current_x)))
-    else:
-        for x in xs:
-            if not x in used_x:
-                current_x_mask = xs[p[:, 0]] == x
-                if current_x_mask.sum() > 1:
-                    current_ids = p[current_x_mask, :]
-                    current_y = ys[current_ids[:, 1]]
-                    current_x = xs[current_ids[:, 0]]
-
-                else:
-                    y = ys[p[current_x_mask, 1]]
-                    current_y_mask = ys[p[:, 1]] == y
-
-                    if current_y_mask.sum() > 1:
-                        current_ids = p[current_y_mask, :]
-                        current_y = ys[current_ids[:, 1]]
-                        current_x = xs[current_ids[:, 0]]
-
-                    else:
-                        current_ids = p[current_x_mask, :].reshape(1, 2)
-                        current_x = x
-                        current_y = y
-
-                candidate_dist = np.min(np.abs(current_x - current_y))
-                candidate_id = np.argmin(np.abs(current_x - current_y))
+            candidate_dist = np.min(np.abs(current_x - current_y))
+            candidate_id = np.argmin(np.abs(current_x - current_y))
+            if threshold is None or candidate_dist < threshold:
                 tuples.append(
                     (current_ids[candidate_id, 0], current_ids[candidate_id, 1])
                 )
-                used_x.update(set(np.unique(current_x)))
+            used_x.update(set(np.unique(current_x)))
+
     return tuples
 
 
@@ -646,7 +614,7 @@ def pitch_and_onset_wise_times_ornament(
     performance_note_array, score_note_array, alignment_ids
 ):
     """
-    from a performed MIDI note to score onset alignment
+    From a performed MIDI note to score onset alignment
     create a list of tuples of (score_onset, performance_onset)
     where the performance_onset is the minimum onset of the performed notes
     at this score onset.
@@ -703,7 +671,6 @@ def pitch_and_onset_wise_times_ornament(
     # keep track of pitches repeated in adjacent score onsets
     last_new_pitches = set()
     for s_o in np.arange(0, len(unique_onsets)):
-        complete_block = []
         any_out = False
         for p in pitches_by_onset[unique_onsets[s_o]]:
             if p not in last_new_pitches:
@@ -937,7 +904,7 @@ def pitch_and_onset_wise_times_rev(
     score_note_array : np.array
         Array of score notes
     alignment_ids : list
-        List of tuples of (score_onset_id, performance_note_id)
+        List of tuples of (performance_note_id, score_onset_id)
 
 
     Returns
@@ -968,35 +935,18 @@ def pitch_and_onset_wise_times_rev(
         )
         for s_onset in unique_onsets
     }
-    # --------reverse specials
-
-    # # keep track of pitches repeated in adjacent score onsets
-    # for s_o in np.arange(1, len(unique_onsets)):
-    #     complete_block = []
-    #     for p in pitches_by_onset[unique_onsets[s_o]]:
-    #         block_by_pitch_by_onset[unique_onsets[s_o]][p] = p in pitches_by_onset[unique_onsets[s_o-1]]
-    #         complete_block.append(block_by_pitch_by_onset[unique_onsets[s_o]][p])
-    #     # keep track of completely repeated score onsets
-    #     all_pitch_repeat_by_onset[unique_onsets[s_o]] = all(complete_block)
-    # for p in pitches_by_onset[unique_onsets[0]]:
-    #     block_by_pitch_by_onset[unique_onsets[0]][p] = False
-
     last_new_pitches = set()
-    for s_o in np.arange(0, len(unique_onsets)):
-        complete_block = []
-        any_out = False
-        for p in pitches_by_onset[unique_onsets[s_o]]:
-            if p not in last_new_pitches:
-                any_out = True
-                block_by_pitch_by_onset[unique_onsets[s_o]][p] = False
-            else:
-                block_by_pitch_by_onset[unique_onsets[s_o]][p] = True
+    for current_onset in unique_onsets:
+        current_pitches = pitches_by_onset[current_onset]
+        all_current_pitches_in_last = True
+        for p in current_pitches:
+            is_blocked = p in last_new_pitches
+            block_by_pitch_by_onset[current_onset][p] = is_blocked
+            if not is_blocked:
+                all_current_pitches_in_last = False
 
-        if any_out:
-            last_new_pitches = pitches_by_onset[unique_onsets[s_o]]
-            all_pitch_repeat_by_onset[unique_onsets[s_o]] = False
-        else:
-            all_pitch_repeat_by_onset[unique_onsets[s_o]] = True
+        all_pitch_repeat_by_onset[current_onset] = all_current_pitches_in_last
+        last_new_pitches = current_pitches
 
     # get first onsets of each pitch in each pitch-stable sequence
     # (dtw alignment messes up the order)
@@ -1030,53 +980,6 @@ def pitch_and_onset_wise_times_rev(
         else:
             time_tuples_by_onset[s_onset] = list(sorted_times)
 
-    # # make clean sequences
-    # onsets_with_performance_times = np.array(list(time_tuples_by_onset.keys()))
-    # current_s_onset_no = 0
-    # for s_onset_no in range(len(unique_onsets)):
-    #     if s_onset_no > current_s_onset_no:
-    #         s_onset = unique_onsets[s_onset_no]
-    #         if all_pitch_repeat_by_onset[s_onset]:
-    #             local_s_onset_no = s_onset_no
-    #             s_onset_range = [unique_onsets[s_onset_no - 1]]
-    #             not_last = True
-    #             while(all_pitch_repeat_by_onset[unique_onsets[local_s_onset_no]]):
-    #                 s_onset_range.append(unique_onsets[local_s_onset_no])
-    #                 local_s_onset_no += 1
-    #                 if local_s_onset_no >= len(unique_onsets)-1:
-    #                     not_last = False
-    #                     break
-    #             if not_last:
-    #                 current_s_onset_no = local_s_onset_no - 1
-    #                 s_onset_range = np.array(s_onset_range)
-    #                 first_s_onset_in_range = s_onset_range[0]
-    #                 first_s_onset_out_of_range = unique_onsets[local_s_onset_no]
-    #                 # --------reverse specials
-
-    #                 first_s_onset_in_range_aligned = np.min(onsets_with_performance_times[onsets_with_performance_times<=first_s_onset_in_range])
-    #                 first_s_onset_out_of_range_aligned = np.max(onsets_with_performance_times[onsets_with_performance_times>=first_s_onset_out_of_range])
-    #                 first_p_onset_in_range = np.min(time_tuples_by_onset[first_s_onset_in_range_aligned])
-    #                 first_p_onset_out_of_range = np.min(time_tuples_by_onset[first_s_onset_out_of_range_aligned])
-    #                 for pitch in pitches_by_onset[s_onset_range[1]]:
-    #                     pitch_mask = performance_note_array['pitch'] == pitch
-    #                     higher_mask = performance_note_array['onset_sec'] <= first_p_onset_in_range
-    #                     lower_mask = performance_note_array['onset_sec'] > first_p_onset_out_of_range
-    #                     available_pp_notes = performance_note_array[np.all((pitch_mask, higher_mask, lower_mask), axis=0)]
-    #                     if len(available_pp_notes) == len(s_onset_range):
-    #                         for s_onset_local, p_onset_local in zip(s_onset_range, available_pp_notes):
-    #                             time_tuples_by_pitch[pitch].append((s_onset_local, p_onset_local['onset_sec']))
-    #                             time_tuples_by_onset[s_onset_local].append(p_onset_local['onset_sec'])
-
-    # # remove outliers
-    # for s_onset in time_tuples_by_onset.keys():
-    #     sorted_times = np.sort(np.array(time_tuples_by_onset[s_onset]))
-    #     mask = np.abs(sorted_times - np.median(sorted_times)) < 0.1
-
-    #     if mask.sum() >= 1:
-    #         time_tuples_by_onset[s_onset] = list(sorted_times[mask])
-    #     else:
-    #         time_tuples_by_onset[s_onset] = list(sorted_times)
-
     unique_time_tuples_by_onset = {
         s_onset: np.min(time_tuples_by_onset[s_onset])
         for s_onset in time_tuples_by_onset.keys()
@@ -1102,30 +1005,15 @@ def get_score_to_perf_map(
 ):
     score_note_array = score_note_array[np.argsort(score_note_array["onset_beat"])]
     # Get time alignments from first unaligned notes
-    (
-        time_tuples_by_onset_forward,
-        _,
-        _,
-        unique_time_tuples_forward,
-    ) = pitch_and_onset_wise_times_ornament(
+    time_tuples_by_onset_forward = pitch_and_onset_wise_times_ornament(
         performance_note_array, score_note_array, onset_alignment
-    )
-    # unique_time_tuples = unique_time_tuples_forward
-    performance_note_array_rev = np.flipud(performance_note_array)
-    score_note_array_no_grace_rev = np.flipud(score_note_array)
-    (
-        time_tuples_by_onset_reverse,
-        _,
-        _,
-        unique_time_tuples_reverse,
-    ) = pitch_and_onset_wise_times_rev(
-        performance_note_array_rev,
-        score_note_array_no_grace_rev,
+    )[0]
+    time_tuples_by_onset_reverse = pitch_and_onset_wise_times_rev(
+        np.flipud(performance_note_array),
+        np.flipud(score_note_array),
         onset_alignment_reverse,
-    )
-
+    )[0]
     # DUAL MATCHER  -----------------------------------------------------------------------------------
-
     unique_time_tuples_by_onset = defaultdict(float)
     all_keys = np.unique(
         list(time_tuples_by_onset_forward.keys())
@@ -1189,7 +1077,6 @@ def get_score_to_perf_map(
             )
 
             for pitch in pitches:
-                done = False
                 pitch_mask = performance_note_array["pitch"] == pitch
                 s_pitch_mask = score_note_array["pitch"] == pitch
 
@@ -1208,9 +1095,6 @@ def get_score_to_perf_map(
                         additional_time_tuples_by_onset[
                             s_onset_local["onset_beat"]
                         ].append(p_onset_local["onset_sec"])
-                    done = True
-
-                if done:
                     break
 
     for s_onset in additional_time_tuples_by_onset.keys():
@@ -1225,8 +1109,10 @@ def get_score_to_perf_map(
             for tup in unique_time_tuples_by_onset.keys()
         ]
     )
-    unique_time_tuples = unique_time_tuples[unique_time_tuples[:, 0].argsort()]
-
+    if unique_time_tuples.size > 0:
+        unique_time_tuples = unique_time_tuples[unique_time_tuples[:, 0].argsort()]
+    else:
+        unique_time_tuples = np.empty((0, 2))
     # # DUAL MATCHER -----------------------------------------------------------------------------------
 
     # import matplotlib.pyplot as plt
@@ -1241,10 +1127,6 @@ def get_score_to_perf_map(
         unique_time_tuples[:, 1],  # perf onsets
         fill_value="extrapolate",
     )
-
-    # score_to_perf_map1 = interp1d(unique_time_tuples_forward[:,0],# score onsets
-    #                              unique_time_tuples_forward[:,1],# perf onsets
-    #                              fill_value="extrapolate")
 
     # from parangonar.evaluate import plot_alignment_mappings
     # plot_alignment_mappings(performance_note_array, score_note_array_no_grace, score_to_perf_map, score_to_perf_map2)
@@ -1490,7 +1372,6 @@ class CleanOrnamentMatcher(object):
                     )
                     ornament_pitch = ornament["pitch"]
                     # find sequence of notes that could belong to the ornament
-
                     for p in np.arange(ornament_pitch - 2, ornament_pitch + 3, 1):
                         possible_ornament_notes.append(
                             na_within(
@@ -1503,7 +1384,15 @@ class CleanOrnamentMatcher(object):
                             )
                         )
 
-                    possible_ornament_notes = np.concatenate(possible_ornament_notes)
+                    # Filter out empty lists. This was previously throwing an error
+                    non_empty_notes = [arr for arr in possible_ornament_notes if isinstance(arr, np.ndarray) and arr.size > 0]
+
+                    # Now concatenate only the non-empty arrays
+                    if non_empty_notes:  # Ensure there are some elements to concatenate
+                        possible_ornament_notes = np.concatenate(non_empty_notes)
+                    else:
+                        possible_ornament_notes = np.array([])  # Or handle it differently if needed
+
                     possible_ornament_notes = possible_ornament_notes[
                         possible_ornament_notes["onset_sec"].argsort()
                     ]
@@ -1973,39 +1862,34 @@ class DualDTWNoteMatcher(object):
         self,
         score_note_array,
         performance_note_array,
-        process_ornaments=False,
+        process_ornaments=True,
         score_part=None,
     ):
         if process_ornaments:
-            if score_part is None:
-                print("score part is required for ornament extraction")
-                score_note_array_ornament = score_note_array
-            else:
+            if 'ornament' not in score_note_array.dtype.names:
+                assert score_part is not None, "score_part must be provided to process ornaments"
                 # add ornament tags to score_note_array
                 notes = score_part.notes_tied
                 fields = [("id", "U256"), ("ornament", "b")]
                 ornament_tags = list()
                 for n in notes:
-                    ornament = False
-                    if n.ornaments:
-                        ornament = True
-                    ornament_tags.append((n.id, ornament))
+                    ornament_tags.append((n.id, bool(n.ornaments)))
                 ornament_tags_array = np.array(ornament_tags, dtype=fields)
                 note_array_joined = np.lib.recfunctions.join_by(
                     "id", score_note_array, ornament_tags_array
                 )
                 score_note_array = note_array_joined.data
-                sort_idx = np.lexsort(
-                    (
-                        score_note_array["duration_div"],
-                        score_note_array["pitch"],
-                        score_note_array["onset_beat"],
-                    )
+            sort_idx = np.lexsort(
+                (
+                    score_note_array["duration_div"],
+                    score_note_array["pitch"],
+                    score_note_array["onset_beat"],
                 )
-                score_note_array = score_note_array[sort_idx]
-                score_note_array_ornament = score_note_array[
-                    score_note_array["ornament"] == True
-                ]
+            )
+            score_note_array = score_note_array[sort_idx]
+            score_note_array_ornament = score_note_array[
+                score_note_array["ornament"] == True
+            ]
         else:
             score_note_array_ornament = score_note_array
 
@@ -2041,17 +1925,16 @@ class DualDTWNoteMatcher(object):
 
 
 class TheGlueNoteMatcher(object):
-    def __init__(self):
-        self.prepare_model()
+    def __init__(self, checkpoint_path=THEGLUENOTE_CHECKPOINT):
+        self.prepare_model(checkpoint_path)
         self.tokenizer = miditok.Structured()
         self.unmatched_idx = 100000000
-        self.matching_threshold = (0.5,)
 
-    def prepare_model(self):
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        checkpoint = torch.load(
-            THEGLUENOTE_CHECKPOINT, map_location=torch.device(self.device)
-        )
+    def prepare_model(self, checkpoint_path):
+        self.device = torch.device("cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu"))
+        if self.device == torch.device("cuda"):
+            self.device = torch.device(f'cuda:{random.randint(0, torch.cuda.device_count()-1)}')
+        checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=True)
         self.model = TheGlueNote(device=self.device)
         self.model.load_state_dict(checkpoint["state_dict"])
         self.model.to(self.device)
@@ -2098,6 +1981,7 @@ class TheGlueNoteMatcher(object):
             )
         return alignment
 
+    @torch.inference_mode
     def get_dtw_alignment_from_model(
         self,
         encoder_model,
@@ -2190,8 +2074,8 @@ class TheGlueNoteMatcher(object):
             s1_exclusion_end,
         ) = get_local_path_from_confidence_matrix(full_similarity_matrix)
         then = time.time()
-        print("DTW local path time: ", then - now)
-        print("PATH length:", len(path), full_similarity_matrix.shape)
+        # print("DTW local path time: ", then - now)
+        # print("PATH length:", len(path), full_similarity_matrix.shape)
 
         s1_to_s2_map = get_input_to_ref_map(
             note_array, note_array_ref, path, return_callable=False

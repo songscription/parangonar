@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 This module contains pretrained pytorch models.
-checkpoints in assets. 
+checkpoints in assets.
 loaded in matchers and online_matchers.
 """
 
@@ -115,10 +115,10 @@ class TheGlueNote(nn.Module):
         device,
         token_number=314,
         position_number=512,
-        dim_model=128,
+        dim_model=256,
         dim_feedforward=None,
         num_heads=8,
-        num_decoder_layers=4,
+        num_decoder_layers=6,
         dropout_p=0.0,
         activation=nn.GELU(),
         using_decoder=True,

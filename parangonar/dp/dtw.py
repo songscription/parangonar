@@ -6,7 +6,6 @@ This module contains dynamic time warping methods.
 
 import numpy as np
 from scipy.spatial.distance import cdist
-import numba
 from numba import jit
 
 # helpers and metrics
@@ -17,16 +16,6 @@ def element_of_metric(vec1, vec2):
     metric that evaluates occurence of vec2 (scalar) in vec1 (vector n-dim)
     """
     return 1 - np.sum(vec2 == vec1)
-
-
-def element_of_set_metric(element_, set_):
-    """
-    metric that evaluates occurence of vec2 (scalar) in vec1 (vector n-dim)
-    """
-    if element_ in set_:
-        return 0.0
-    else:
-        return 1.0
 
 
 def l2(vec1, vec2):
@@ -226,12 +215,12 @@ class DynamicTimeWarpingSingleLoop(object):
     pure python vanilla Dynamic Time Warping
     """
 
-    def __init__(self, metric=element_of_set_metric):
+    def __init__(self, metric="element_of_set_metric"):
         self.metric = metric
 
     def __call__(self, X, Y, return_path=True, return_cost_matrix=False):
         # Compute the pw distances and accumulated cost matrix
-        dtwd_matrix = cdist_dtw_single_loop(X, Y, self.metric)
+        dtwd_matrix = cdist_dtw_fast(X, Y, self.metric)
         # dtwd_matrix = dtw_dmatrix_from_pairwise_dmatrix(D)
         dtwd_distance = dtwd_matrix[-1, -1]
 
@@ -551,19 +540,15 @@ def dtw_dmatrix_from_pairwise_dmatrix(D):
     return dtwd[1:, 1:]
 
 
-def cdist_dtw_single_loop(arr1, arr2, metric):
+def cdist_dtw_single_loop(arr1, arr2, metric="element_of_set_metric"):
     """
-
-    compute  a pairwise distance matrix
+    compute a pairwise distance matrix
     and its dynamic time warping cost matrix
 
     Parameters
     ----------
-
     arr1: numpy nd array or list
-
     arr2: numpy nd array or list
-
     metric> callable
         a metric function
 
@@ -572,32 +557,94 @@ def cdist_dtw_single_loop(arr1, arr2, metric):
     dtwd : np.ndarray
         Accumulated cost matrix
     """
+    def element_of_set_metric(element_, set_):
+        """
+        metric that evaluates occurence of vec2 (scalar) in vec1 (vector n-dim)
+        """
+        if element_ in set_:
+            return 0.0
+        else:
+            return 1.0
+    if metric == "element_of_set_metric":
+        metric = element_of_set_metric
+    else:
+        metric = metric
     # Initialize arrays and helper variables
     M = len(arr1)  # arr1.shape[0]
     N = len(arr2)  # arr2.shape[0]
 
-    # pdist_array = np.ones((M,N))*np.inf
     # the dtwd distance matrix is initialized with INFINITY
-    dtwd = np.ones((M + 1, N + 1), dtype=float) * np.inf
+    dtwd = np.full((M + 1, N + 1), np.inf, dtype=float)
 
     # Compute the distance iteratively
     dtwd[0, 0] = 0
     for i in range(1, M + 1):
         for j in range(1, N + 1):
-            # pdist_array[i-1, j-1] = metric(arr1[i-1], arr2[j-1])
-            # c = pdist_array[i - 1, j - 1]
             c = metric(arr1[i - 1], arr2[j - 1])
             insertion = dtwd[i - 1, j]
             deletion = dtwd[i, j - 1]
             match = dtwd[i - 1, j - 1]
             dtwd[i, j] = c + min((insertion, deletion, match))
-
     return dtwd[1:, 1:]  # pdist_array
 
 
+@jit(nopython=True)
+def fill_dtw(costs):
+    dtwd = np.full_like(costs, np.inf, dtype=np.float32)
+    dtwd[0, 0] = 0.0
+    for i in range(1, costs.shape[0]):
+        for j in range(1, costs.shape[1]):
+            dtwd[i, j] = costs[i, j] + min(dtwd[i - 1, j], dtwd[i, j - 1], dtwd[i - 1, j - 1])
+    return dtwd[1:, 1:]
+
+
+def cdist_dtw_fast(arr1: list[int], arr2: list[set[int]], metric="element_of_set_metric"):
+    """
+    Optimized version of cdist_dtw_single_loop using numba for acceleration.
+    Computes a pairwise distance matrix and its dynamic time warping cost matrix.
+
+    Parameters
+    ----------
+    arr1: list of ints
+        First sequence
+    arr2: list of sets of ints
+        Second sequence of sets
+    metric: callable or str
+        A metric function or "element_of_set_metric" string
+
+    Returns
+    -------
+    dtwd : np.ndarray
+        Accumulated cost matrix
+    """
+    # If not using the default metric, fall back to the original implementation
+    if metric != "element_of_set_metric":
+        return cdist_dtw_single_loop(arr1, arr2, metric)
+
+    arr1_fixed = np.asarray(arr1, dtype=np.int64)
+    max_set_size2 = max([len(a) for a in arr2], default=0)
+    arr2_fixed = np.full((len(arr2), max_set_size2), -1, dtype=np.int64)
+    for i, arr in enumerate(arr2):
+        arr2_fixed[i, :len(arr)] = list(arr)
+
+    def compute_dtw_matrix(arr1_fixed, arr2_fixed):
+        """
+        Numba-optimized function to compute the DTW matrix
+        """
+        # Initialize the DTW matrix with infinity
+        M, N = arr1_fixed.shape[0], arr2_fixed.shape[0]
+        costs = np.full((M + 1, N + 1), np.inf, dtype=np.float32)
+
+        arr1_fixed = arr1_fixed.reshape(M, 1, 1)
+        arr2_fixed = arr2_fixed.reshape(1, N, -1)
+        costs[1:M+1, 1:N+1] = np.all(arr1_fixed != arr2_fixed, axis=2)
+
+        dtwd = fill_dtw(costs)
+        return dtwd
+
+    return compute_dtw_matrix(arr1_fixed, arr2_fixed)
+
 # FDTW fw + bw
-
-
 @jit(nopython=True)
 def flexdtw_forward_and_backward(
     pwD,
@@ -606,7 +653,7 @@ def flexdtw_forward_and_backward(
     buffer=1,
 ):
     """
-    compute felxDTW cost matrix,
+    compute flexDTW cost matrix,
     backtrace matrix,
     and starting point matrix
     from a pairwise distance matrix
