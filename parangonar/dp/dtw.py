@@ -463,9 +463,8 @@ def dtw_backtracking(dtwd):
     # Initialize a vector for candidate distances
     dtwd_candidates = np.zeros(3, dtype=float)
     # initialize boolean variables for stopping decoding
-    crit = True
 
-    while crit:
+    while n > 0 or m > 0:
         if n == 0:
             # next point in the path
             m = m - 1
@@ -499,9 +498,6 @@ def dtw_backtracking(dtwd):
         step = [n, m]
         # append next step to the path
         path.append(step)
-
-        if n == 0 and m == 0:
-            crit = False
 
     return np.array(path[::-1], dtype=int)
 
@@ -574,7 +570,7 @@ def cdist_dtw_single_loop(arr1, arr2, metric="element_of_set_metric"):
     N = len(arr2)  # arr2.shape[0]
 
     # the dtwd distance matrix is initialized with INFINITY
-    dtwd = np.full((M + 1, N + 1), np.inf, dtype=float)
+    dtwd = np.full((M + 1, N + 1), np.float32(np.inf))
 
     # Compute the distance iteratively
     dtwd[0, 0] = 0
@@ -590,7 +586,7 @@ def cdist_dtw_single_loop(arr1, arr2, metric="element_of_set_metric"):
 
 @jit(nopython=True)
 def fill_dtw(costs):
-    dtwd = np.full_like(costs, np.inf, dtype=np.float32)
+    dtwd = np.full_like(costs, np.float32(np.inf))
     dtwd[0, 0] = 0.0
     for i in range(1, costs.shape[0]):
         for j in range(1, costs.shape[1]):
@@ -633,7 +629,7 @@ def cdist_dtw_fast(arr1: list[int], arr2: list[set[int]], metric="element_of_set
         """
         # Initialize the DTW matrix with infinity
         M, N = arr1_fixed.shape[0], arr2_fixed.shape[0]
-        costs = np.full((M + 1, N + 1), np.inf, dtype=np.float32)
+        costs = np.full((M + 1, N + 1), np.float32(np.inf))
 
         arr1_fixed = arr1_fixed.reshape(M, 1, 1)
         arr2_fixed = arr2_fixed.reshape(1, N, -1)

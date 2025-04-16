@@ -1270,40 +1270,20 @@ class CleanOrnamentMatcher(object):
                 score_note_array_pitch["onset_beat"]
             )
 
-            if (
-                (
-                    performance_note_array_pitch.shape[0] > 1
-                    and score_note_array_pitch.shape[0] > 1
-                )
-                or (
-                    performance_note_array_pitch.shape[0] > 1
-                    and score_note_array_pitch.shape[0] == 1
-                )
-                or (
-                    performance_note_array_pitch.shape[0] == 1
-                    and score_note_array_pitch.shape[0] > 1
-                )
-            ):
+            perf_len = performance_note_array_pitch.shape[0]
+            score_len = score_note_array_pitch.shape[0]
+
+            if perf_len > 1 or score_len > 1 and (perf_len > 0 and score_len > 0):
                 s_p_ID_tuples = unique_alignments(
                     estimated_performance_note_onsets,
                     performance_note_array_pitch["onset_sec"],
                     threshold=onset_threshold,
                 )
-
-            elif (
-                performance_note_array_pitch.shape[0] == 1
-                and score_note_array_pitch.shape[0] == 1
-            ):
-                if (
-                    np.abs(
-                        estimated_performance_note_onsets[0]
-                        - performance_note_array_pitch["onset_sec"][0]
-                    )
-                    < onset_threshold1
-                ):
-                    s_p_ID_tuples = [(0, 0)]
-                else:
-                    s_p_ID_tuples = []
+            elif perf_len == 1 and score_len == 1:
+                onset_diff = abs(
+                    estimated_performance_note_onsets[0] - performance_note_array_pitch["onset_sec"][0]
+                )
+                s_p_ID_tuples = [(0, 0)] if onset_diff < onset_threshold1 else []
             else:
                 s_p_ID_tuples = []
 
