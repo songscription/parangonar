@@ -716,51 +716,6 @@ def pitch_and_onset_wise_times_ornament(
         else:
             time_tuples_by_onset[s_onset] = list(sorted_times)
 
-    # # make clean sequences
-    # onsets_with_performance_times = np.array(list(time_tuples_by_onset.keys()))
-    # current_s_onset_no = 0
-    # for s_onset_no in range(len(unique_onsets)):
-    #     if s_onset_no > current_s_onset_no:
-    #         s_onset = unique_onsets[s_onset_no]
-    #         if all_pitch_repeat_by_onset[s_onset]:
-    #             local_s_onset_no = s_onset_no
-    #             s_onset_range = [unique_onsets[s_onset_no - 1]]
-    #             not_last = True
-    #             while(all_pitch_repeat_by_onset[unique_onsets[local_s_onset_no]]):
-    #                 s_onset_range.append(unique_onsets[local_s_onset_no])
-    #                 local_s_onset_no += 1
-    #                 if local_s_onset_no >= len(unique_onsets)-1:
-    #                     not_last = False
-    #                     break
-    #             if not_last:
-    #                 current_s_onset_no = local_s_onset_no - 1
-    #                 s_onset_range = np.array(s_onset_range)
-    #                 first_s_onset_in_range = s_onset_range[0]
-    #                 first_s_onset_out_of_range = unique_onsets[local_s_onset_no]
-    #                 first_s_onset_in_range_aligned = np.max(onsets_with_performance_times[onsets_with_performance_times<=first_s_onset_in_range])
-    #                 first_s_onset_out_of_range_aligned = np.min(onsets_with_performance_times[onsets_with_performance_times>=first_s_onset_out_of_range])
-    #                 first_p_onset_in_range = np.min(time_tuples_by_onset[first_s_onset_in_range_aligned])
-    #                 first_p_onset_out_of_range = np.min(time_tuples_by_onset[first_s_onset_out_of_range_aligned])
-    #                 for pitch in pitches_by_onset[s_onset_range[1]]:
-    #                     pitch_mask = performance_note_array['pitch'] == pitch
-    #                     higher_mask = performance_note_array['onset_sec'] >= first_p_onset_in_range
-    #                     lower_mask = performance_note_array['onset_sec'] < first_p_onset_out_of_range
-    #                     available_pp_notes = performance_note_array[np.all((pitch_mask, higher_mask, lower_mask), axis=0)]
-    #                     if len(available_pp_notes) == len(s_onset_range):
-    #                         for s_onset_local, p_onset_local in zip(s_onset_range, available_pp_notes):
-    #                             time_tuples_by_pitch[pitch].append((s_onset_local, p_onset_local['onset_sec']))
-    #                             time_tuples_by_onset[s_onset_local].append(p_onset_local['onset_sec'])
-
-    # # remove outliers
-    # for s_onset in time_tuples_by_onset.keys():
-    #     sorted_times = np.sort(np.array(time_tuples_by_onset[s_onset]))
-    #     mask = np.abs(sorted_times - np.median(sorted_times)) < 0.1
-
-    #     if mask.sum() >= 1:
-    #         time_tuples_by_onset[s_onset] = list(sorted_times[mask])
-    #     else:
-    #         time_tuples_by_onset[s_onset] = list(sorted_times)
-
     unique_time_tuples_by_onset = {
         s_onset: np.min(time_tuples_by_onset[s_onset])
         for s_onset in time_tuples_by_onset.keys()
@@ -890,7 +845,7 @@ def pitch_and_onset_wise_times_rev(
     backwards=True,
 ):
     """
-    from a performed MIDI note to score onset alignment
+    From a performed MIDI note to score onset alignment
     create a list of tuples of (score_onset, performance_onset)
     where the performance_onset is the minimum onset of the performed notes
     at this score onset.
@@ -900,29 +855,32 @@ def pitch_and_onset_wise_times_rev(
     Parameters
     ----------
     performance_note_array : np.array
-        Array of performed notes
+        Array of performed notes (structured array with 'pitch', 'onset_sec', 'id')
     score_note_array : np.array
-        Array of score notes
+        Array of score notes (structured array with 'pitch', 'onset_beat')
     alignment_ids : list
-        List of tuples of (performance_note_id, score_onset_id)
+        List of tuples of (performance_note_idx, score_onset_idx)
 
 
     Returns
     -------
     time_tuples_by_onset : dict
-        Dictionary of list of (performance_onsets)
+        Dictionary of list of (performance_onsets) indexed by score_onsets.
     unique_time_tuples_by_onset : dict
-        Dictionary of (earliest) performance_onsets indexed by score_onsets
+        Dictionary of (earliest) performance_onsets indexed by score_onsets.
     time_tuples_by_pitch : dict
-        Dictionary of lists of tuples of (score_onset, performance_onset)
+        Dictionary of lists of tuples of (score_onset, performance_onset) indexed by pitch.
     unique_time_tuples : np.array
-        Array of (score_onset, (earliest) performance_onset) tuples
+        Array of (score_onset, (earliest) performance_onset) tuples, sorted by score_onset.
 
     """
     p_aligned = set()
     time_tuples_by_onset = defaultdict(list)
     time_tuples_by_pitch = defaultdict(list)
-    block_by_pitch_by_onset = defaultdict(dict)
+    # This tracks which score pitches have already been assigned a performance note
+    # for a specific score onset. Prevents adding multiple performance notes
+    # if they align to the same score pitch at the same score onset.
+    used_score_pitch_at_onset = defaultdict(dict)
     all_pitch_repeat_by_onset = defaultdict(lambda: False)
 
     # --------reverse specials
@@ -941,7 +899,7 @@ def pitch_and_onset_wise_times_rev(
         all_current_pitches_in_last = True
         for p in current_pitches:
             is_blocked = p in last_new_pitches
-            block_by_pitch_by_onset[current_onset][p] = is_blocked
+            used_score_pitch_at_onset[current_onset][p] = is_blocked
             if not is_blocked:
                 all_current_pitches_in_last = False
 
@@ -951,24 +909,30 @@ def pitch_and_onset_wise_times_rev(
     # get first onsets of each pitch in each pitch-stable sequence
     # (dtw alignment messes up the order)
     used_pitches_by_onset = defaultdict(set)
-    for p_no, s_onset_no in alignment_ids:
-        # p_no is the index of the performance note in the performance note array
-        # s_onset_no is the index of the score onset in the unique_onsets array
-        p_note = performance_note_array[p_no]
+    for p_idx, s_onset_idx in alignment_ids:
+        # p_idx is the index of the performance note in the performance note array
+        # s_onset_idx is the index of the score onset in the unique_onsets array
+        p_note = performance_note_array[p_idx]
         pid = str(p_note["id"])
         ppitch = p_note["pitch"]
-        if pid not in p_aligned:
-            s_onset = unique_onsets[s_onset_no]
-            used_pitches = used_pitches_by_onset[s_onset]
-            available_pitches = pitches_by_onset[s_onset]
-            s_pitch_used = ppitch in used_pitches
-            s_pitch_available = ppitch in available_pitches
-            if s_pitch_available and not s_pitch_used:
-                if not block_by_pitch_by_onset[s_onset][ppitch]:
-                    used_pitches_by_onset[s_onset].add(ppitch)
-                    time_tuples_by_pitch[ppitch].append((s_onset, p_note["onset_sec"]))
-                    time_tuples_by_onset[s_onset].append(p_note["onset_sec"])
-                    p_aligned.add(pid)
+        if pid in p_aligned:
+            continue
+
+        s_onset = unique_onsets[s_onset_idx]
+        used_pitches = used_pitches_by_onset[s_onset]
+        available_pitches = pitches_by_onset[s_onset]
+        s_pitch_used = ppitch in used_pitches
+        s_pitch_available = ppitch in available_pitches
+
+        if not s_pitch_available or s_pitch_used:
+            continue
+
+        if used_score_pitch_at_onset[s_onset][ppitch]:
+            continue
+        used_pitches_by_onset[s_onset].add(ppitch)
+        time_tuples_by_pitch[ppitch].append((s_onset, p_note["onset_sec"]))
+        time_tuples_by_onset[s_onset].append(p_note["onset_sec"])
+        p_aligned.add(pid)
 
     # remove outliers
     for s_onset in time_tuples_by_onset.keys():
@@ -1111,8 +1075,11 @@ def get_score_to_perf_map(
     )
     if unique_time_tuples.size > 0:
         unique_time_tuples = unique_time_tuples[unique_time_tuples[:, 0].argsort()]
-    else:
-        unique_time_tuples = np.empty((0, 2))
+    else:  # standard matcher unable to find matches
+        if performance_note_array.shape[0] == score_note_array.shape[0] and np.all(performance_note_array["pitch"] == score_note_array["pitch"]):
+            unique_time_tuples = np.array([(s_onset, p_onset) for s_onset, p_onset in zip(score_note_array["onset_beat"], performance_note_array["onset_sec"])])
+        else:
+            raise ValueError(f"Unable to match {performance_note_array.shape[0]} notes to {score_note_array.shape[0]} notes")
     # # DUAL MATCHER -----------------------------------------------------------------------------------
 
     # import matplotlib.pyplot as plt
